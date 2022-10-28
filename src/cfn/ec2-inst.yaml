@@ -1,0 +1,166 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Launch EC2 Instance with Apache httpd
+Parameters:
+    InboundCidrParam:
+        Type: String
+        Description: Inbound CIDR for SSH access
+    KeyPairName:
+        Type: String
+        Description: Key Pair Name
+    AmiParam:
+        Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+        Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+Resources:
+  SampleVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: "192.168.0.0/16"
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: 'sample-vpc'
+  SampleVpcIgw:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: 'sample-vpc-igw'
+  SampleVpcIgwAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref SampleVpc
+      InternetGatewayId: !Ref SampleVpcIgw
+  SampleVpcPubSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SampleVpc
+      AvailabilityZone: !Select
+        - 0
+        - Fn::GetAZs: !Ref AWS::Region
+      CidrBlock: "192.168.0.0/24"
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: 'sample-vpc-pub-subnet1'
+  SampleVpcPubSubnet1RTB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref SampleVpc
+      Tags:
+        - Key: Name
+          Value: 'sample-vpc-pub-subnet1-rtb'
+  SampleVpcPubSubnet1RouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref SampleVpcPubSubnet1RTB
+      SubnetId: !Ref SampleVpcPubSubnet1
+  SampleVpcPubSubnet1Route1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref SampleVpcPubSubnet1RTB
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref SampleVpcIgw
+  SampleVpcPubSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SampleVpc
+      AvailabilityZone: !Select
+        - 1
+        - Fn::GetAZs: !Ref AWS::Region
+      CidrBlock: "192.168.1.0/24"
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: 'sample-vpc-pub-subnet2'
+  SampleVpcPubSubnet2RTB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref SampleVpc
+      Tags:
+        - Key: Name
+          Value: 'sample-vpc-pub-subnet2-rtb'
+  SampleVpcPubSubnet2RouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref SampleVpcPubSubnet2RTB
+      SubnetId: !Ref SampleVpcPubSubnet2
+  SampleVpcPubSubnet2Route1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref SampleVpcPubSubnet2RTB
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref SampleVpcIgw
+  SampleVpcSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Security Group for EC2 Instance'
+      SecurityGroupEgress:
+        - CidrIp: '0.0.0.0/0'
+          Description: 'Allow all outbound traffic'
+          IpProtocol: -1
+      SecurityGroupIngress:
+        CidrIp: !Ref InboundCidrParam
+        Description: 'Allow SSH'
+        FromPort: 22
+        IpProtocol: tcp
+        ToPort: 22
+      VpcId: !Ref SampleVpc
+      Tags:
+        - Key: Name
+          Value: 'sample-vpc-sg'
+  Ec2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: 'ec2-inst-role'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: '/'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore'
+        - 'arn:aws:iam::aws:policy/AmazonSSMReadOnlyAccess'
+  Ec2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref Ec2Role
+  Ec2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      AvailabilityZone: !Select
+        - 0
+        - Fn::GetAZs: !Ref AWS::Region
+      IamInstanceProfile: !Ref Ec2InstanceProfile
+      ImageId: !Ref AmiParam
+      InstanceType: t2.micro
+      KeyName: !Ref KeyPairName
+      SecurityGroupIds:
+        - !GetAtt SampleVpcSG.GroupId
+      SubnetId: !Ref SampleVpcPubSubnet1
+      Tags:
+        - Key: Name
+          Value: 'sample-ec2'
+        - Key: ProjectName
+          Value: 'PROJ-SharedNetwork'
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -x
+          yum -y update
+          yum -y install unzip
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          ./aws/install --update
+          echo "PATH=\$PATH:/usr/local/bin" >> /etc/bashrc
+          echo "export PATH" >> /etc/bashrc
+          amazon-linux-extras install -y lamp-mariadb10.2-php7.2 php7.2
+          yum install -y httpd
+          systemctl start httpd
+          systemctl enable httpd
+
